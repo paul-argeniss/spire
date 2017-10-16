@@ -262,11 +262,12 @@ func (a *Agent) bootstrap() error {
 // TODO: Refactor me for length, testability
 func (a *Agent) attest() (map[string]*common.RegistrationEntry, error) {
 	var err error
-	a.config.Log.Info("Preparing to attest against ", a.config.ServerAddress.String())
 
 	// Handle the join token seperately, if defined
 	pluginResponse := &nodeattestor.FetchAttestationDataResponse{}
 	if a.config.JoinToken != "" {
+		a.config.Log.Info("Preparing to attest this node against ", a.config.ServerAddress.String(), " using strategy 'join-token'")
+
 		data := &common.AttestedData{
 			Type: "join_token",
 			Data: []byte(a.config.JoinToken),
@@ -285,6 +286,16 @@ func (a *Agent) attest() (map[string]*common.RegistrationEntry, error) {
 			return nil, fmt.Errorf("Expected only one node attestor plugin, found %i", len(plugins))
 		}
 		attestor := plugins[0]
+
+		// Find node attestor in catalog
+		nodeAttestorPluginName := ""
+		for _, p := range a.Catalog.Plugins() {
+			if p.Config.PluginType == catalog.NodeAttestorType {
+				nodeAttestorPluginName = p.Config.PluginName
+			}
+		}
+		a.config.Log.Info("Preparing to attest this node against ", a.config.ServerAddress.String(),
+			" using strategy '", nodeAttestorPluginName, "'")
 
 		pluginResponse, err = attestor.FetchAttestationData(&nodeattestor.FetchAttestationDataRequest{})
 		if err != nil {
@@ -342,7 +353,7 @@ func (a *Agent) attest() (map[string]*common.RegistrationEntry, error) {
 	a.BaseSVID = svid.SvidCert
 	a.BaseSVIDTTL = svid.Ttl
 	a.storeBaseSVID()
-	a.config.Log.Info("Attestation complete")
+	a.config.Log.Info("Node attestation complete")
 	return registrationEntryMap, nil
 }
 
