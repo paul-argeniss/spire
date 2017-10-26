@@ -8,16 +8,19 @@ import (
 	"crypto/x509/pkix"
 	"io/ioutil"
 	"net"
+	"net/url"
 	"os"
+	"path"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/spiffe/spire/proto/agent/keymanager"
+	"github.com/spiffe/spire/proto/api/node"
 	"github.com/spiffe/spire/proto/common"
+	"github.com/spiffe/spire/test/mock/agent/cache"
 	"github.com/spiffe/spire/test/mock/agent/catalog"
 	"github.com/stretchr/testify/suite"
-	"github.com/spiffe/spire/test/mock/agent/cache"
 )
 
 type selectors []*common.Selector
@@ -48,12 +51,14 @@ func (suite *AgentTestSuite) SetupTest() {
 		Organization: []string{"testOrg"}}
 	errCh := make(chan error)
 
+	os.Remove(path.Join(os.TempDir(), BaseSvidFilename))
+
 	l, _ := test.NewNullLogger()
 	suite.config = &Config{BindAddress: addr, CertDN: certDN,
 		DataDir:   os.TempDir(),
 		PluginDir: os.TempDir(), Log: l, ServerAddress: srvAddr,
-		ErrorCh:    errCh,
-		}
+		ErrorCh: errCh,
+	}
 
 }
 
@@ -85,11 +90,40 @@ func (suite *AgentTestSuite) Testbootstrap() {
 	suite.Assert().Equal(expectedkey, suite.agent.baseSVIDKey)
 }
 
+func (suite *AgentTestSuite) TestAttest() {
+	baseSvidKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	publicKey, _ := x509.MarshalPKIXPublicKey(baseSvidKey)
+
+	suite.config.JoinToken = "join_token"
+	suite.config.TrustDomain = url.URL{
+		Scheme: "spiffe",
+		Host:   "example.org",
+	}
+
+	suite.agent = &Agent{
+		baseSVIDKey: baseSvidKey,
+		Catalog:     suite.mockPluginCatalog,
+		config:      suite.config,
+		fetchSvid: func(req *FetchSvidReq) (*FetchSvidResp, error) {
+			return &FetchSvidResp{
+				svids: map[string]*node.Svid{
+					"spiffe://example.org/spire/agent/join_token/join_token": &node.Svid{
+						SvidCert: publicKey,
+					},
+				},
+			}, nil
+		},
+	}
+
+	_, err := suite.agent.attest()
+	suite.Require().NoError(err)
+}
+
 func (suite *AgentTestSuite) TestSocketPermission() {
 	suite.agent = &Agent{
-		Catalog: suite.mockPluginCatalog,
-		CacheMgr:suite.mockCacheManager,
-		config:  suite.config}
+		Catalog:  suite.mockPluginCatalog,
+		CacheMgr: suite.mockCacheManager,
+		config:   suite.config}
 
 	suite.agent.serverCerts = []*x509.Certificate{&x509.Certificate{}, &x509.Certificate{}}
 	suite.mockCacheManager.EXPECT().Cache().Return(nil)

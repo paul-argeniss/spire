@@ -67,6 +67,19 @@ type Config struct {
 	Umask int
 }
 
+type FetchSvidReq struct {
+	attestedData *common.AttestedData
+	csr          []byte
+}
+
+type FetchSvidResp struct {
+	svids       map[string]*node.Svid
+	serverCerts []*x509.Certificate
+	regEntries  []*common.RegistrationEntry
+}
+
+type FetchSvidFunc func(fetchSvidReq *FetchSvidReq) (*FetchSvidResp, error)
+
 type Agent struct {
 	BaseSVID    []byte
 	baseSVIDKey *ecdsa.PrivateKey
@@ -78,7 +91,10 @@ type Agent struct {
 	serverCerts []*x509.Certificate
 	ctx         context.Context
 	cancel      context.CancelFunc
+	fetchSvid   FetchSvidFunc
 }
+
+const BaseSvidFilename = "base_svid.crt" // TODO: Make configurable?
 
 func New(ctx context.Context, c *Config) *Agent {
 	config := &catalog.Config{
@@ -86,12 +102,16 @@ func New(ctx context.Context, c *Config) *Agent {
 		Log:       c.Log.WithField("subsystem_name", "catalog"),
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	return &Agent{
+	agent := &Agent{
 		config:  c,
 		Catalog: catalog.New(config),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
+	agent.fetchSvid = func(r *FetchSvidReq) (*FetchSvidResp, error) {
+		return fetchSvid(agent, r)
+	}
+	return agent
 }
 
 // Run the agent
@@ -288,8 +308,6 @@ func (a *Agent) bootstrap() error {
 
 // Attest the agent, obtain a new Base SVID. Returns a spiffeid->registration entries map
 // which is used to generate CSRs for non-base SVIDs and update the agent cache entries
-//
-// TODO: Refactor me for length, testability
 
 func (a *Agent) attest() ([]*common.RegistrationEntry, error) {
 	var err error
@@ -338,46 +356,35 @@ func (a *Agent) attest() ([]*common.RegistrationEntry, error) {
 		return nil, fmt.Errorf("Failed to generate CSR for attestation: %s", err)
 	}
 
-	// Since we are bootstrapping, this is explicitly _not_ mTLS
-	conn, err := a.getNodeAPIClientConn(false, a.BaseSVID, a.baseSVIDKey)
+	r, err := a.fetchSvid(&FetchSvidReq{
+		attestedData: pluginResponse.AttestedData,
+		csr:          csr,
+	})
+	if r == nil {
+		return nil, fmt.Errorf("FetchSvid returned nil")
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
-	nodeClient := node.NewNodeClient(conn)
 
-	// Perform attestation
-	req := &node.FetchBaseSVIDRequest{
-		AttestedData: pluginResponse.AttestedData,
-		Csr:          csr,
-	}
-
-	calloptPeer := new(peer.Peer)
-
-	serverResponse, err := nodeClient.FetchBaseSVID(context.Background(), req, grpc.Peer(calloptPeer))
-	if err != nil {
-		return nil, fmt.Errorf("Failed attestation against spire server: %s", err)
-	}
-
-	if tlsInfo, ok := calloptPeer.AuthInfo.(credentials.TLSInfo); ok {
-		a.serverCerts = tlsInfo.State.PeerCertificates
+	if r.serverCerts != nil {
+		a.serverCerts = r.serverCerts
 	}
 
 	// Pull base SVID out of the response
-	svids := serverResponse.SvidUpdate.Svids
-	if len(svids) > 1 {
+	if len(r.svids) > 1 {
 		a.config.Log.Info("More than one SVID received during attestation!")
 	}
-	svid, ok := svids[id.String()]
+	svid, ok := r.svids[id.String()]
 	if !ok {
-		return nil, fmt.Errorf("Base SVID not found in attestation response")
+		return nil, fmt.Errorf("Base SVID with ID '%s' not found in attestation response", id.String())
 	}
 
 	a.BaseSVID = svid.SvidCert
 	a.BaseSVIDTTL = svid.Ttl
 	a.storeBaseSVID()
 	a.config.Log.Info("Attestation complete")
-	return serverResponse.SvidUpdate.RegistrationEntries, nil
+	return r.regEntries, nil
 }
 
 // Generate a CSR for the given SPIFFE ID
@@ -408,11 +415,46 @@ func (a *Agent) generateCSR(spiffeID *url.URL, key *ecdsa.PrivateKey) ([]byte, e
 	return csr, nil
 }
 
+// Fetches SVID from Node API
+func fetchSvid(a *Agent, r *FetchSvidReq) (*FetchSvidResp, error) {
+	// Since we are bootstrapping, this is explicitly _not_ mTLS
+	conn, err := a.getNodeAPIClientConn(false, a.BaseSVID, a.baseSVIDKey)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	nodeClient := node.NewNodeClient(conn)
+
+	// Perform attestation
+	req := &node.FetchBaseSVIDRequest{
+		AttestedData: r.attestedData,
+		Csr:          r.csr,
+	}
+
+	calloptPeer := new(peer.Peer)
+
+	serverResponse, err := nodeClient.FetchBaseSVID(context.Background(), req, grpc.Peer(calloptPeer))
+	if err != nil {
+		return nil, fmt.Errorf("Failed attestation against spire server: %s", err)
+	}
+
+	serverCerts := []*x509.Certificate{}
+	if tlsInfo, ok := calloptPeer.AuthInfo.(credentials.TLSInfo); ok {
+		serverCerts = tlsInfo.State.PeerCertificates
+	}
+
+	return &FetchSvidResp{
+		svids:       serverResponse.SvidUpdate.Svids,
+		serverCerts: serverCerts,
+		regEntries:  serverResponse.SvidUpdate.RegistrationEntries,
+	}, nil
+}
+
 // Read base SVID from data dir and load it
 func (a *Agent) loadBaseSVID() error {
 	a.config.Log.Info("Loading base SVID from disk")
 
-	certPath := path.Join(a.config.DataDir, "base_svid.crt")
+	certPath := path.Join(a.config.DataDir, BaseSvidFilename)
 	if _, err := os.Stat(certPath); os.IsNotExist(err) {
 		a.config.Log.Info("A base SVID could not be found. A new one will be generated")
 		return nil
@@ -435,7 +477,7 @@ func (a *Agent) loadBaseSVID() error {
 
 // Write base SVID to storage dir
 func (a *Agent) storeBaseSVID() {
-	certPath := path.Join(a.config.DataDir, "base_svid.crt")
+	certPath := path.Join(a.config.DataDir, BaseSvidFilename)
 	f, err := os.Create(certPath)
 	defer f.Close()
 	if err != nil {
