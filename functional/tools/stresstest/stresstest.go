@@ -8,10 +8,9 @@ import (
 )
 
 const (
-	serverAddr           = "localhost:8081"
-	parentSpiffeIDPrefix = "spiffe://example.org/spire/agent/join_token/"
-	spiffeIDPrefix       = "spiffe://example.org/"
-	workloadPath         = "/go/src/github.com/spiffe/spire/functional/tools/workload/workload"
+	serverAddr     = "localhost:8081"
+	spiffeIDPrefix = "spiffe://example.org/"
+	workloadPath   = "/go/src/github.com/spiffe/spire/functional/tools/workload/workload"
 )
 
 func main() {
@@ -27,6 +26,9 @@ func main() {
 		},
 		"createusers": func() (cli.Command, error) {
 			return &CreateUsers{}, nil
+		},
+		"register": func() (cli.Command, error) {
+			return &Register{}, nil
 		},
 	}
 

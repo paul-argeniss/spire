@@ -1,6 +1,6 @@
 # Parameters
-WORKLOADS := 50
-TIMEOUT := 30
+WORKLOADS := 100
+TIMEOUT := 60
 TTL := 120
 
 # Convenience vars
@@ -25,7 +25,8 @@ agent:
 	cd .. && touch $(AGENT_LOG)
 	$(eval TOKEN := $(shell docker-compose exec runner $(DOCKER_SPIRE)/functional/tools/tokengenerator/tokengenerator))
 	@echo Generated join token is $(TOKEN)
-	docker-compose exec runner bash -c 'cd $(DOCKER_SPIRE)/functional && tools/stresstest/stresstest createusers -token=$(TOKEN) -workloads $(WORKLOADS) -ttl $(TTL)'
+	docker-compose exec runner bash -c 'cd $(DOCKER_SPIRE)/functional && tools/stresstest/stresstest createusers -workloads $(WORKLOADS)'
+	docker-compose exec runner bash -c 'cd $(DOCKER_SPIRE)/functional && tools/stresstest/stresstest register -parent=spiffe://example.org/spire/agent/join_token/$(TOKEN) -workloads $(WORKLOADS) -ttl $(TTL)'
 	docker-compose exec -d runner bash -c 'cd $(DOCKER_SPIRE) && cmd/spire-agent/spire-agent run -joinToken $(TOKEN) -logLevel DEBUG -logFile /spire-orig/$(AGENT_LOG)'
 	sleep 1
 
