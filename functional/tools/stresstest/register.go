@@ -24,10 +24,11 @@ func (*Register) Help() string {
 
 //Run create users
 func (*Register) Run(args []string) int {
-	var users, ttl int
+	var users, ttl, base int
 	var parent string
 	flags := flag.NewFlagSet("register", flag.ContinueOnError)
 	flags.IntVar(&users, "workloads", 5, "Number of workloads to run in parallel")
+	flags.IntVar(&base, "baseuid", 0, "Base UID")
 	flags.StringVar(&parent, "parent", "", "Parent Spiffe ID")
 	flags.IntVar(&ttl, "ttl", 120, "SVID TTL")
 
@@ -48,7 +49,7 @@ func (*Register) Run(args []string) int {
 
 	// Register workloads
 	for i := 0; i < users; i++ {
-		uid := 1000 + i
+		uid := base + i
 
 		wg.Add(1)
 		go func(uid int) {

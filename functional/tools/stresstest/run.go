@@ -28,16 +28,18 @@ func (*Run) Help() string {
 
 //Run tests
 func (*Run) Run(args []string) int {
-	var users, ttl, timeout int
-	var token string
+	var users, timeout, base int
+	var wl string
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.IntVar(&users, "workloads", 5, "Number of workloads to run in parallel")
-	flags.StringVar(&token, "token", "", "Join token used in server and agent")
-	flags.IntVar(&ttl, "ttl", 120, "SVID TTL")
+	//flags.StringVar(&token, "token", "", "Join token used in server and agent")
+	flags.StringVar(&wl, "wl", "", "Path to workload executable")
+	flags.IntVar(&base, "baseuid", 0, "Base UID")
+	//flags.IntVar(&ttl, "ttl", 120, "SVID TTL")
 	flags.IntVar(&timeout, "timeout", 15, "Total time to run test")
 
 	err := flags.Parse(args)
-	if err != nil || token == "" {
+	if err != nil || wl == "" {
 		return 1
 	}
 
@@ -47,11 +49,11 @@ func (*Run) Run(args []string) int {
 
 	// Launch workloads
 	for i := 0; i < users; i++ {
-		uid := 1000 + i
+		uid := base + i
 
 		fmt.Printf("Launching workload %d\n", uid)
 
-		c := exec.Command(workloadPath, "-timeout", strconv.Itoa(timeout))
+		c := exec.Command(wl, "-timeout", strconv.Itoa(timeout))
 		c.SysProcAttr = &syscall.SysProcAttr{
 			Credential: &syscall.Credential{Uid: uint32(uid)},
 		}
