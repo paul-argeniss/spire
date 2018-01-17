@@ -144,7 +144,7 @@ func (s *nodeServer) FetchSVID(server node.Node_FetchSVIDServer) (err error) {
 			return errors.New("An SPIFFE ID is required for this request")
 		}
 		ctxSpiffeID := uriNames[0]
-		s.l.Debug("FetchSVID...", ctxSpiffeID)
+		s.l.Debug("FetchSVID processing...", ctxSpiffeID)
 
 		selectors, err := s.getStoredSelectors(ctxSpiffeID)
 		if err != nil {
@@ -178,6 +178,8 @@ func (s *nodeServer) FetchSVID(server node.Node_FetchSVIDServer) (err error) {
 				RegistrationEntries: regEntries,
 			},
 		})
+
+		s.l.Debug("FetchSVID finished...")
 	}
 }
 

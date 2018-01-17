@@ -76,6 +76,7 @@ type manager struct {
 	once             sync.Once
 	doneCh           chan struct{}
 	pipelineCnt      int32
+	aliasSpiffeId    string
 }
 
 func NewManager(ctx context.Context, c *MgrConfig) (Manager, error) {
@@ -151,9 +152,11 @@ func (m *manager) Init() {
 			case reqs := <-m.entryRequestCh:
 				for parentId, entryRequests := range reqs {
 					if _, ok := m.spiffeIdEntryMap[parentId]; ok {
+						m.log.Debug("Found match...", parentId)
 						svid = m.spiffeIdEntryMap[parentId].SVID
 						key = m.spiffeIdEntryMap[parentId].PrivateKey
 					} else if parentId == m.baseSPIFFEID || parentId == "spiffe://example.org/cp" {
+						m.log.Debug("Default...", parentId)
 						entry := m.getBaseSVIDEntry()
 						svid = entry.svid
 						key = entry.key
@@ -172,8 +175,8 @@ func (m *manager) Init() {
 
 			case newCacheEntry := <-m.cacheEntryCh:
 				m.managedCache.SetEntry(newCacheEntry)
-				m.spiffeIdEntryMap[newCacheEntry.RegistrationEntry.ParentId] = newCacheEntry
-				m.log.Debugf("Updated CacheEntry for SPIFFEId: %s", newCacheEntry.RegistrationEntry.SpiffeId)
+				//m.spiffeIdEntryMap[newCacheEntry.RegistrationEntry.ParentId] = newCacheEntry
+				m.log.Debugf("Updated CacheEntry for SPIFFEId: %s, parentId %s", newCacheEntry.RegistrationEntry.SpiffeId, newCacheEntry.RegistrationEntry.ParentId)
 				m.addToPipeline(-1)
 
 			case <-m.ctx.Done():
@@ -332,9 +335,18 @@ func (m *manager) expiredCacheEntryHandler(cacheFrequency time.Duration, wg *syn
 
 			if vanityRecord != nil {
 				m.fetchWithEmptyCSR(vanityRecord[0].SVID, vanityRecord[0].PrivateKey)
+			} else {
+				baseEntry := m.getBaseSVIDEntry()
+				m.fetchWithEmptyCSR(baseEntry.svid, baseEntry.key)
 			}
-			entry := m.getBaseSVIDEntry()
-			m.fetchWithEmptyCSR(entry.svid, entry.key)
+
+			entry, ok := m.spiffeIdEntryMap[m.aliasSpiffeId]
+			if ok {
+				m.log.Debug("expiredCacheEntryHandler.fetchWithEmptyCSR...", m.aliasSpiffeId)
+				m.fetchWithEmptyCSR(entry.SVID, entry.PrivateKey)
+			} else {
+				m.log.Debug("expiredCacheEntryHandler.fetchWithEmptyCSR... skipped")
+			}
 
 		case <-m.ctx.Done():
 			return
@@ -352,6 +364,11 @@ func (m *manager) regEntriesHandler(wg *sync.WaitGroup) {
 			entryRequestMap := make(map[string][]EntryRequest)
 
 			for _, regEntry := range regEntries {
+				if regEntry.ParentId == "spiffe://example.org/cp" {
+					m.aliasSpiffeId = regEntry.SpiffeId
+					m.log.Debug("Setting alias to ", m.aliasSpiffeId)
+				}
+
 				key := util.DeriveRegEntryhash(regEntry)
 				_, processed := processedEntries[key]
 				if !processed {
